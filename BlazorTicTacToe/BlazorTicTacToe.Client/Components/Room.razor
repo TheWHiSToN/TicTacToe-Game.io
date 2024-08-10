@@ -1,0 +1,156 @@
+﻿@if (CurrentRoom is not null)
+{
+    <h3>@CurrentRoom.RoomName</h3>
+
+    if(CurrentRoom.Players.Count<2)
+    {
+        <h4>Waiting for another player to join...</h4>
+    }
+
+    if(!CurrentRoom.Game.GameStarted && CurrentRoom.Game.PlayerXId!=myPlayerId &&
+    CurrentRoom.Players.Count==2)
+    {
+        <h4>Waiting for the other player to start the game...</h4>
+        
+    }
+    if (CurrentRoom.Game.GameOver && !CurrentRoom.Game.IsDraw)
+    {
+        <h4>Game Over! Winner: @CurrentRoom.Game.Winner</h4>
+    }
+    if (!CurrentRoom.Game.GameOver && CurrentRoom.Game.IsDraw)
+    {
+        <h4>Game Over! Draw!</h4>
+    }
+     
+    if ((!CurrentRoom.Game.GameStarted || CurrentRoom.Game.GameOver)
+        && CurrentRoom.Game.PlayerXId == myPlayerId 
+        && CurrentRoom.Players.Count == 2)
+    {
+        <button @onclick="StartGame">Start Game</button>
+    }
+    
+    
+
+    if(CurrentRoom.Game.GameStarted)
+    {
+        <h4>It's @CurrentRoom.Game.CurrentPlayerSymbol's turn</h4>
+        <span>Currently playing: @CurrentRoom.Players[0].Name (X), @CurrentRoom.Players[1].Name (O)</span>
+        
+        <table class="tic-tac-toe">
+            @for (int row = 0; row < 3; row++)
+            {
+                <tr>
+                    @for(int col=0;col<3;col++)
+                    {
+                        var r = row;
+                        var c = col;
+                        <td @onclick="()=> MakeMove(r,c)">
+                            @CurrentRoom.Game.Board[r][c]
+                        </td>
+                    }
+                </tr>
+            }
+        </table>
+
+        @if(!IsMyTurn() && !CurrentRoom.Game.GameOver)
+        {
+            <p>Please wait for the other player to make a move.</p>
+        }
+    }
+    <div class="chat-container">
+        <h3>Chat</h3>
+        <input type="text" @bind="chatMessage" placeholder="Type your message..." />
+        <button @onclick="SendMessage">Send</button>
+        <div class="chat-messages">
+            @foreach (var chatMessage in chatMessages)
+            {
+                <div>@chatMessage.User: @chatMessage.Message</div>
+            }
+        </div>
+       
+    </div>
+}
+
+@code {
+    private string? playerName;
+    private string? myPlayerId;
+    private string chatMessage = string.Empty;
+    private List<ChatMessage> chatMessages = new List<ChatMessage>();
+    [CascadingParameter]
+    public HubConnection? HubConnection { get; set; }
+    [Parameter]
+    public GameRoom? CurrentRoom { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (CurrentRoom is null || HubConnection is null || HubConnection.ConnectionId is null)
+            return; 
+
+        myPlayerId = HubConnection.ConnectionId;
+        playerName = CurrentRoom.Players.FirstOrDefault(p => p.ConnectionId == HubConnection.ConnectionId)?.Name ?? "Unknown Player";
+
+        HubConnection.On<Player>("PlayerJoined", player =>
+        {
+            CurrentRoom.Players.Add(player);
+            StateHasChanged();
+        });
+
+        HubConnection.On<GameRoom>("UpdateGame", serverRoom =>
+        {
+            CurrentRoom = serverRoom;
+            StateHasChanged();
+        });
+        HubConnection.On<string, string>("ReceiveMessage", (user, message) =>
+       {
+           chatMessages.Add(new ChatMessage { User = user, Message = message });
+           StateHasChanged();
+       });
+    }
+
+
+    async Task StartGame()
+    {
+        if (HubConnection is null || CurrentRoom is null)
+            return;
+
+        await HubConnection.InvokeAsync("StartGame", CurrentRoom.RoomId);
+    }
+
+    private async Task MakeMove(int row, int col)
+    {
+        if (IsMyTurn()
+        && CurrentRoom is not null
+        && CurrentRoom.Game.GameStarted
+        && !CurrentRoom.Game.GameOver
+        && HubConnection is not null)
+        {
+            await HubConnection.InvokeAsync("MakeMove",
+            CurrentRoom.RoomId,
+            row,
+            col,
+            myPlayerId);
+        }
+    }
+    private bool IsMyTurn()
+    {
+        if(CurrentRoom is not null)
+        {
+            return myPlayerId == CurrentRoom.Game.CurrentPlayerId;
+        }
+        return false;
+    }
+    private async Task SendMessage()
+    {
+        if (HubConnection is not null && !string.IsNullOrEmpty(chatMessage))
+        {
+            await HubConnection.InvokeAsync("SendMessage", playerName, chatMessage);
+            chatMessage = string.Empty;
+        }
+    }
+    public class ChatMessage
+    {
+        public string User { get; set; }
+        public string Message { get; set; }
+    }
+}
+
